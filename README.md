@@ -6,7 +6,7 @@ each year you wish to use it for .The helper is able to keep track of your team 
 
 How to Run
 
-The gui can be loaded by runing the fantasy_fb.py file
+The gui can be loaded by running the fantasy_fb_gui.py file in your local enviroment after installing tkinter
 
 Future upgrades
 

@@ -12,9 +12,9 @@ I developed a Fantasy Football helper using Python and Streamlit that assists yo
   - Streamlit: For building an interactive user interface
 
 ## Dataset
-The project utilized multiple datasets from the US Labor Statistics website, including:
-- **Education, Occupation, Industry, and Labor Force Data**: Projections from 2019-2029 and 2023-2033.
-- **Manually Created User and Job Datasets**: Tailored to simulate real-world job seeker scenarios.
+The project utilized multiple datasets, including:
+- **Fanasty Rankings**: Fanasty Rankings found on fanastypros
+- **Web Scrapped Data**: Web scrapped career and season data from Pro Football Reference 
 
 ## Application Flow
 ### Home Page
@@ -22,14 +22,19 @@ The project utilized multiple datasets from the US Labor Statistics website, inc
 - Allows users to change what position they are targeting
 - Buttons on the bottom of the page that will direct you to other features
 
-### Other Pages
+### Other Pages/Features
 - **Stat Search Dashboard**: Provides broad insights into a player of your choice.
 - **Team Info Dashboard**: Offers detailed breakdown of each team currently drafted.
 - **Favorites Dashboard**: Allows you to favorite players in the draft that are saved to your user account.
+- **Auto Draft Feature**:Auto draft for non user teams to give user a sense of how a draft would go
+- **Machine Learning Rankings**:Machine Learning Rankings which was trained on career data and test on last years data
 
 
 ## Future Scope
-- **Machine Learning Recommnedation System**: For future enhancements of this program, I intend to incorporate a machine learning algorithm to determine the most suitable player for your team based on a multitude of attributes, including injury history, team success, and opportunities. Any suggestions or feedback would be greatly appreciated.
+- **Improve Machine Learning Recommnedation System**: For future enhancements of this program, I intend to continue to improve the machine learing algorithm to better predict player sucess. Any suggestions or feedback would be greatly appreciated.
+- **Improve user interface**
+- **Improve Auto Draft**
+- **Implement in React for moblie app implementation**
 
 ## Contributors
 - **Henry Kern**

@@ -21,18 +21,19 @@ headers = {
 
 
 #for quarterbacks
-print("Do cleaning on test2? Y/N")
-clean_data = input()
-if clean_data == "Y":
-    clean_data = True
+
+print("Clear existing Data ? Y/N")
+clear_data = input()
+if clear_data == "Y":
+    clear_data = True
 else:
-    clean_data = False
+    clear_data = False
 #data cleaning for testing qb data
-if clean_data == True:
-    df = pd.read_csv('data_used/test2.csv')
-    df.drop(columns=['Awards','Player-additional'], inplace=True)
-    df['FP'] = (df['Yds'] * 0.04)+(df['TD']*6)-(df['Int']*2)
-    df.to_csv('data_used/test2.csv', index=False)
+if clear_data == True:
+    # Initialize the files with headers
+    with open('data_used/train2.csv', 'w') as f:
+        f.write('Player,Age,Team,Pos,G,GS,Cmp,Att,Cmp%,Yds,TD,TD%,Int,Int%,1D,Succ%,Lng,Y/A,AY/A,Y/C,Y/G,Rate,QBR,Sk,Yds_sack,Sk%,NY/A,ANY/A,4QC,GWD,FP\n')
+    open('data_used/historical_seasons_pass.csv', 'w').close()
 
 res2 = requests.get(url2, headers=headers)
 print("Response Status Code:", res2.status_code)  # Check if the request was successful
@@ -47,7 +48,16 @@ for td in soup2.find_all('td', class_='left'):
         qb_url_list.append(a_tag2['href'])  # Get player URL
 
 # Output the results
-qb_names = [name for name in qb_list if name not in ['PHI', 'BAL', 'DET', 'ATL', 'CIN', 'GNB', 'IND', 'MIN', 'TAM', 'ARI', 'MIA', 'NOR', 'LAR', 'NYJ', 'CHI', 'JAX', 'DAL', 'PIT', 'HOU', 'TEN', 'SFO', 'WAS', 'NWE', 'LVR', 'KAN', 'BUF', 'DEN', 'SEA', 'LAC', 'CAR', 'AP-2', 'PB','NYG','CLE']]
+
+qb_names = [name for name in qb_list if name not in [
+    'PB','PHI', 'BAL', 'DET', 'ATL', 'CIN', 'GNB', 'IND', 'MIN', 'TAM', 'ARI', 
+    'MIA', 'NOR', 'LAR', 'NYJ', 'CHI', 'JAX', 'DAL', 'PIT', 'HOU', 'TEN', 
+    'SFO', 'WAS', 'NWE', 'LVR', 'KAN', 'BUF', 'DEN', 'SEA', 'LAC', 'CAR', 
+    'NYG', 'CLE'] and not any(char.isdigit() for char in name)]
+
+# Filter out any remaining entries that start with award designations
+qb_names = [name for name in qb_names if not any(name.startswith(prefix) for prefix in ['AP', 'SB', 'MVP', 'ORoY', 'OPoY', 'CPoY'])]
+
 #print("Player Names:", qb_names)
 qb_urls = [i for i in qb_url_list if i.startswith('/players/')]
 #print("Player URLs:", qb_urls)
@@ -58,6 +68,7 @@ qb_urls = [i for i in qb_url_list if i.startswith('/players/')]
 counter2=0
 df = pd.read_csv('data_used/train2.csv')
 names_df = df[['Player']].dropna().reset_index(drop=True)
+
 
 for qb_url in qb_urls:
     print(f"Current counter: {counter2}, Processing Player: {qb_url}")
@@ -130,7 +141,7 @@ for qb_url in qb_urls:
 
         
         
-
+        
         # Format the data to match the headers and create a DataFrame for each year
         for row in passing:
             # Create a dictionary for this row's data
@@ -164,7 +175,7 @@ for qb_url in qb_urls:
         final_df = final_df.drop(columns=[col for col in columns_to_drop if col in final_df.columns], axis=1)
         final_df['Player'] = qb_names[counter2]
 
-       
+        
 
         
         # Check the columns in final_df
@@ -186,27 +197,27 @@ for qb_url in qb_urls:
             '1D', 'Succ%', 'Lng', 'Y/A', 'AY/A', 'Y/C', 'Y/G', 'Rate', 
             'QBR', 'Sk', 'Yds_sack', 'Sk%', 'NY/A', 'ANY/A', '4QC', 'GWD'
         ]
-
+        print(final_df.head)
+        final_df.to_csv("data_used/historical_seasons_pass.csv",mode='a',header=False,index=False)
         # Initialize career_stats with the first row for Season, Age, Team, Pos
-        career_stats = final_df[['Player', 'Age', 'Team', 'Pos']].iloc[len(final_df)-1]
+        if len(final_df) > 0:
+            career_stats = final_df[['Player', 'Age', 'Team', 'Pos']].iloc[len(final_df)-1]
+            
+            # Loop through the columns and calculate the mean if the column exists
+            for col in columns_to_summarize:
+                if col in final_df.columns:
+                    career_stats[col] = final_df[col].mean()  # Calculate mean
+                else:
+                    career_stats[col] = None  # Set to None if the column does not exist
 
-        # Loop through the columns and calculate the mean if the column exists
-        for col in columns_to_summarize:
-            if col in final_df.columns:
-                career_stats[col] = final_df[col].mean()  # Calculate mean
-            else:
-                career_stats[col] = None  # Set to None if the column does not exist
+            career_stats['FP'] = (career_stats['Yds'] * 0.04)+(career_stats['TD']*6)-(career_stats['Int']*2)
 
-
-
-        career_stats['FP'] = (career_stats['Yds'] * 0.04)+(career_stats['TD']*6)-(career_stats['Int']*2)
-
-
-        # Convert the Series to a DataFrame
-        career_stats_df = pd.DataFrame(career_stats).T
-        # Display the career statistics
-        #print(career_stats_df)
-        career_stats_df.to_csv('data_used/train2.csv', mode='a',header=False,index=False)
+            # Convert the Series to a DataFrame
+            career_stats_df = pd.DataFrame(career_stats).T
+            career_stats_df.to_csv('data_used/train2.csv', mode='a',header=False,index=False)
+        else:
+            print(f"No valid data found for player {qb_names[counter2]}, skipping...")
+        
         counter2 += 1  # Ensure this is executed at the end of processing
 
 
@@ -214,18 +225,7 @@ for qb_url in qb_urls:
 """""
 #for rushing and recieving
 
-print("Do cleaning on test? Y/N")
-clean_data = input()
-if clean_data == "Y":
-    clean_data = True
-else:
-    clean_data = False
-#data cleaning for testing qb data
-if clean_data == True:
-    df = pd.read_csv('data_used/test.csv')
-    df.drop(columns=['Awards'], inplace=True)
-    df['FP'] = (df['YScm'] * 0.1)+(df['Rec']*1)+(df['RRTD']*6)+(df['Fmb']*-2)
-    df.to_csv('data_used/test.csv', index=False)
+
 
 
 ## Scrape for table data
@@ -242,7 +242,15 @@ for td in soup.find_all('td', class_='left'):
         playerURL_list.append(a_tag['href'])  # Get player URL
 
 # Output the results
-player_names = [name for name in player_list if name not in ['PHI', 'BAL', 'DET', 'ATL', 'CIN', 'GNB', 'IND', 'MIN', 'TAM', 'ARI', 'MIA', 'NOR', 'LAR', 'NYJ', 'CHI', 'JAX', 'DAL', 'PIT', 'HOU', 'TEN', 'SFO', 'WAS', 'NWE', 'LVR', 'KAN', 'BUF', 'DEN', 'SEA', 'LAC', 'CAR', 'AP-2', 'PB','NYG','CLE']]
+player_names = [name for name in player_list if name not in [
+    'PB','PHI', 'BAL', 'DET', 'ATL', 'CIN', 'GNB', 'IND', 'MIN', 'TAM', 'ARI', 
+    'MIA', 'NOR', 'LAR', 'NYJ', 'CHI', 'JAX', 'DAL', 'PIT', 'HOU', 'TEN', 
+    'SFO', 'WAS', 'NWE', 'LVR', 'KAN', 'BUF', 'DEN', 'SEA', 'LAC', 'CAR', 
+    'NYG', 'CLE'] and not any(char.isdigit() for char in name)]
+
+# Filter out any remaining entries that start with award designations
+player_names = [name for name in player_names if not any(name.startswith(prefix) for prefix in ['AP', 'SB', 'MVP', 'ORoY', 'OPoY', 'CPoY'])]
+
 #print("Player Names:", player_names)
 player_urls = [i for i in playerURL_list if i.startswith('/players/')]
 #print("Player URLs:", player_urls)
@@ -251,6 +259,7 @@ player_urls = [i for i in playerURL_list if i.startswith('/players/')]
 counter=0
 df = pd.read_csv('data_used/train.csv')
 names_df = df[['Player']].dropna().reset_index(drop=True)
+
 
 for player_url in player_urls:
     print(f"Current counter: {counter}, Processing Player: {player_url}")
@@ -271,7 +280,9 @@ for player_url in player_urls:
 
         # Reset final_df for the new player
         all_years_data = []
+        
         final_df = pd.DataFrame()  # Reset DataFrame for new player
+        
 
         soup2 = BeautifulSoup(res2.text, features="html.parser")
 
@@ -322,44 +333,60 @@ for player_url in player_urls:
             'rush_receive_td': 'RRTD',
             'fumbles': 'Fmb',
             'av': 'AV',
-            'awards': 'Awards'
         }
 
         # Format the data to match the headers and create a DataFrame for each year
         for row in rushing_receiving:
+            # Skip header rows
+            if row.get('class') and 'thead' in row.get('class'):
+                continue
+            
             # Create a dictionary for this row's data
             formatted_row = {}
-    
+            
             # Loop through all td elements in the row
             for td in row.find_all(['td', 'th']):
                 stat_name = td.get('data-stat')
+                
+                # Skip any award-related data stats
+                if stat_name in ['awards', 'player-additional']:
+                    continue
+                    
                 if stat_name in data_stat_mapping:
                     value = td.get_text(strip=True)
+                    # Remove any award text that might be in the value
+                    if value and any(award in value for award in ['AP', 'PB', 'AP1', 'AP2']):
+                        value = value.split(' ')[0]  # Take only the first part before any award text
                     formatted_row[data_stat_mapping[stat_name]] = value
-    
-            # Only add rows that have data
-            if formatted_row:  # Only append if the dictionary is not empty
+
+            # Only add rows that have data and are not header rows
+            if formatted_row and not all(v in data_stat_mapping.values() for v in formatted_row.values()):
                 all_years_data.append(formatted_row)
 
         # Create DataFrame from all collected data
+        
         final_df = pd.DataFrame()  # Reset DataFrame for new player
         final_df = pd.DataFrame(all_years_data)
+        
 
         # Drop rows where all columns are NA
         final_df = final_df.dropna(how='all')
 
         # Filter out summary rows by requiring Age, Team, or Lg to have a value
         final_df = final_df[final_df[['Age', 'Team', 'Lg']].notna().any(axis=1)]
+        
+    
 
         # Assuming 'df' is your DataFrame
         final_df = final_df.drop(index=0).reset_index(drop=True)
         # Check if 'AV' exists in the DataFrame before dropping
         if 'AV' in final_df.columns:
-            final_df = final_df.drop(["Awards", "AV", "Lg"], axis=1)
+            final_df = final_df.drop([ "AV", "Lg"], axis=1)
         else:
-            final_df = final_df.drop(["Awards", "Lg"], axis=1)  # Drop only the columns that exist
+            final_df = final_df.drop([ "Lg"], axis=1)  # Drop only the columns that exist
         final_df['Player'] = player_names[counter]
-
+        
+        
 
         # Check the columns in final_df
         #print("Columns in final_df:", final_df.columns)
@@ -376,35 +403,32 @@ for player_url in player_urls:
         final_df = final_df.dropna(how='all')
         # Summarize career statistics
         columns_to_summarize = [
-            'G', 'GS', 'Att', 'Cmp%', 'Yds', 'TD', 'TD%', 'Int', 'Int%', 
-            '1D', 'Succ%', 'Lng', 'Y/A', 'AY/A', 'Y/C', 'Y/G', 'Rate', 
-            'QBR', 'Sk', 'Sk%', 'NY/A', 'ANY/A', '4QC', 'GWD'
+            'G', 'GS', 'Att', 'Yds', 'TD', 'Rec', 'Y/R', 'Tgt', 'Touch', 'YScm', 'RRTD', 'Fmb'
         ]
-
+        
+        final_df.to_csv("data_used/historical_seasons_scrim.csv",mode='a',header=False,index=False)
         # Initialize career_stats with the first row for Season, Age, Team, Pos
-        career_stats = final_df[['Player', 'Age', 'Team', 'Pos']].iloc[len(final_df)-1]
+        if len(final_df) > 0:
+            career_stats = final_df[['Player', 'Age', 'Team', 'Pos']].iloc[len(final_df)-1]
+            
+            # Loop through the columns and calculate the mean if the column exists
+            for col in columns_to_summarize:
+                if col in final_df.columns:
+                    career_stats[col] = final_df[col].mean()  # Calculate mean
+                else:
+                    career_stats[col] = None  # Set to None if the column does not exist
 
-        # Loop through the columns and calculate the mean if the column exists
-        for col in columns_to_summarize:
-            if col in final_df.columns:
-                career_stats[col] = final_df[col].mean()  # Calculate mean
-            else:
-                career_stats[col] = None  # Set to None if the column does not exist
+            career_stats['FP'] = (career_stats['YScm'] * 0.1)+(career_stats['Rec']*1)+(career_stats['RRTD']*6)+(career_stats['Fmb']*-2)
 
-        # Note: The AY/A column is handled separately in the loop above
-
-        career_stats['FP'] = (career_stats['YScm'] * 0.1)+(career_stats['Rec']*1)+(career_stats['RRTD']*6)+(career_stats['Fmb']*-2)
-
-
-        # Convert the Series to a DataFrame
-        career_stats_df = pd.DataFrame(career_stats).T
-
-        # Display the career statistics
-        #print(career_stats_df)
-        career_stats_df.to_csv('data_used/train.csv', mode='a',header=False,index=False)
+            # Convert the Series to a DataFrame
+            career_stats_df = pd.DataFrame(career_stats).T
+            career_stats_df.to_csv('data_used/train.csv', mode='a',header=False,index=False)
+        else:
+            print(f"No valid data found for player {player_names[counter]}, skipping...")
+        
         counter += 1  # Ensure this is executed at the end of processing
 
-"""
+"""""
 
 
 

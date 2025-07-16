@@ -1,153 +1,134 @@
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LassoCV
 from sklearn.impute import SimpleImputer
-import csv
+from sklearn.model_selection import cross_val_score
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import KFold
+import xgboost as xgb
 
 # Load data
-train_data = pd.read_csv("data_used/train.csv")
-test_data = pd.read_csv("data_used/test.csv")
+train_data = pd.read_csv("data_used/train.csv", sep=",")
+test_data = pd.read_csv("data_used/test.csv", sep=",")
 
-# Print available columns
-#print("Available columns in training data:")
-#print(train_data.columns.tolist())
+# Feature engineering - add interaction terms and normalized features
+def create_advanced_features(df):
+    df_new = df.copy()
+    # Yards per attempt
+    df_new['YPA'] = df_new['Yds'] / df_new['Att'].replace(0, 1)
+    # Yards per target
+    df_new['YPT'] = df_new['Yds'] / df_new['Tgt'].replace(0, 1)
+    # TD rate
+    df_new['TD_Rate'] = df_new['TD'] / df_new['Att'].replace(0, 1)
+    # Usage rate
+    df_new['Usage'] = (df_new['Att'] + df_new['Tgt']) / df_new['G'].replace(0, 1)
+    return df_new
 
-def calculate_age_risk_factor(player_name, player_type):
-    player_history = train_data[train_data['Player'] == player_name]
-    
-    if player_history.empty:
-        return 1.0
-    
-    player_age = player_history['Age'].iloc[-1] if 'Age' in player_history.columns else 25
-    
-    # More aggressive thresholds and decay rates
-    if player_type > 0.3:  # Receiver (lowered threshold to better identify RBs)
-        age_threshold = 27
-        decay_rate = 0.15
-    else:  # RB - more aggressive decay
-        age_threshold = 25
-        decay_rate = 0.10  
-    
-    # Calculate age factor
-    if player_age <= age_threshold:
-        age_factor = 1.0
-    else:
-        age_factor = np.exp(-decay_rate * (player_age - age_threshold))
-    
-    # Debug print
-    #print(f"Player: {player_name}, Age: {player_age}, Type: {'Receiver' if player_type > 0.3 else 'RB'}, Factor: {age_factor:.3f}")
-    
-    return age_factor
+# Create advanced features for both datasets
+train_data = create_advanced_features(train_data)
+test_data = create_advanced_features(test_data)
 
-# Calculate receiving vs rushing ratio to determine player type
-def calculate_player_type_factor(row):
-    total_yards = row['Yds'] if row['Yds'] > 0 else 1
-    total_touches = row['Touch'] if row['Touch'] > 0 else 1
-    
-    # Calculate receiving ratio based on receptions vs total touches
-    rec_ratio = row['Rec'] / total_touches if total_touches > 0 else 0
-    
-    # Debug print
-    #print(f"Player: {row['Player']}, Rec Ratio: {rec_ratio:.3f}")
-    
-    return rec_ratio
-
-# Keep all features but add interaction terms
+# Update features list with new features
 features = [
     'G', 'GS', 'Att', 'Yds', 'TD',          
     'Rec', 'YScm', 'RRTD', 'Touch',         
-    'Tgt', 'Y/R'                            
+    'Tgt', 'Y/R', 'YPA', 'YPT', 'TD_Rate', 'Usage'                            
 ]
 
-# Prepare training data
-X = np.array(train_data[features])
-y = np.array(train_data['FP'])
+# Prepare historical data
+X_historical = np.array(train_data[features])
+y_historical = np.array(train_data['FP'])
 
-# Initialize imputer
-imputer = SimpleImputer(strategy='mean')
+# Prepare recent data
+X_recent = np.array(test_data[features])
+y_recent = np.array(test_data['FP'])
 
-# Train model
-model = LassoCV(cv=5, random_state=42, max_iter=2000)
-X = imputer.fit_transform(X)
-model.fit(X, y)
+# Initialize imputer with median strategy instead of mean
+imputer = SimpleImputer(strategy='median')
+X_historical = imputer.fit_transform(X_historical)
+X_recent = imputer.transform(X_recent)
 
-# Make predictions with position-aware adjustments
-X_test = imputer.transform(np.array(test_data[features]))
-base_predictions = model.predict(X_test)
+# Normalize features to improve model stability
+scaler = StandardScaler()
+X_historical = scaler.fit_transform(X_historical)
+X_recent = scaler.transform(X_recent)
 
-# Calculate adjustments for each player
-predictions = []
-for idx, row in test_data.iterrows():
-    pred = base_predictions[idx]
-    
-    # Calculate player type factor (0 = pure rusher, 1 = pure receiver)
-    player_type = calculate_player_type_factor(row)
-    
-    # Adjust injury risk based on player type and age
-    games_played = row['G']
-    touches_per_game = row['Touch'] / games_played if games_played > 0 else 0
-    
-    # More forgiving injury factor for receiving-heavy players
-    base_touch_penalty = 30 + (20 * player_type)
-    injury_factor = np.clip(
-        games_played/17 * np.exp(-touches_per_game/base_touch_penalty), 
-        0.8 + (0.1 * player_type),
-        1.0
-    )
-    
-    # Add age-based risk factor
-    age_factor = calculate_age_risk_factor(row['Player'], player_type)
-    injury_factor = injury_factor * age_factor
-    
-    # Games played projection
-    games_factor = np.minimum(16/max(games_played, 1), 1.3)
-    
-    # Apply baseline minimum based on games played
-    min_fp = 50 if games_played > 8 else 0
-    
-    # Apply adjustments
-    pred = max(pred, min_fp)
-    pred = pred * injury_factor * games_factor
-    
-    # Universal maximum cap
-    max_fp = 500  
-    pred = min(pred, max_fp)
-    
-    predictions.append(pred)
+# Adjust weights for a more balanced approach
+weight_recent = 0.6
+weight_historical = 0.4
 
-predictions = np.array(predictions)
+X_combined = np.vstack([
+    X_historical * weight_historical,
+    X_recent * weight_recent
+])
+y_combined = np.concatenate([y_historical, y_recent])
 
-# Before saving predictions to CSV, aggregate duplicates by taking the mean
+# Update XGBoost parameters to be more conservative
+xgb_model = XGBRegressor(
+    n_estimators=300,          # More trees for stability
+    learning_rate=0.01,        # Much lower learning rate
+    max_depth=3,               # Reduced depth to prevent overfitting
+    min_child_weight=5,        # Increased to prevent overfitting
+    subsample=0.7,             # Reduced to prevent overfitting
+    colsample_bytree=0.7,      # Reduced to prevent overfitting
+    gamma=2,                   # Increased minimum loss reduction
+    reg_alpha=0.5,            # Increased L1 regularization
+    reg_lambda=2,             # Increased L2 regularization
+    random_state=42
+)
+
+# Use KFold instead of default CV for more stable results
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+cv_scores = cross_val_score(xgb_model, X_combined, y_combined, cv=kf, scoring='r2')
+
+# Calculate and print CV scores
+print("\nCross-validation R² scores:", cv_scores)
+print("Average CV R² score: %0.3f (+/- %0.3f)" % (cv_scores.mean(), cv_scores.std() * 2))
+
+# Create evaluation set
+eval_set = [(X_combined, y_combined)]
+
+# Fit model with proper early stopping syntax for older XGBoost versions
+xgb_model.fit(
+    X_combined, 
+    y_combined,
+    eval_set=eval_set,
+    verbose=False
+)
+
+# Scale test data before prediction
+X_test = scaler.transform(np.array(test_data[features]))
+predictions = xgb_model.predict(X_test)
+
+# Clip predictions to reasonable range (e.g., 0 to 400 fantasy points)
+predictions = np.clip(predictions, 0, 400)
+
+# Create predictions DataFrame
 predictions_df = pd.DataFrame({
     'Player': test_data['Player'],
     'Predicted_FP': predictions
 })
 
-# Group by Player and take the mean of predictions for duplicates
-predictions_df = predictions_df.groupby('Player')['Predicted_FP'].mean().reset_index()
+# Check for duplicates and keep only first occurrence
+duplicate_players = predictions_df['Player'].duplicated(keep='first')
+if duplicate_players.any():
+    print("\nRemoving duplicate entries for players:")
+    print(predictions_df[duplicate_players]['Player'].unique())
+    predictions_df = predictions_df[~predictions_df['Player'].duplicated(keep='first')]
 
-#save only rb and wr
-predictions_df = predictions_df[predictions_df['Player'].isin(train_data[train_data['Pos'].isin(['RB', 'WR', 'TE'])]['Player'])]
-#print(predictions_df)
-
-# Save predictions to CSV
-with open('data_used/flex.csv', mode='w', newline='') as flex:
-    writer = csv.writer(flex)
-    writer.writerow(['Player', 'Predicted_FP'])
-    for _, row in predictions_df.iterrows():
-        writer.writerow([row['Player'], round(row['Predicted_FP'], 1)])
-
-
-coef_df = pd.DataFrame({
+# Feature importance
+importance_df = pd.DataFrame({
     'Feature': features,
-    'Coefficient': model.coef_
+    'Importance': xgb_model.feature_importances_
 })
-print("\nFeature Coefficients:")
-print(coef_df.sort_values('Coefficient', key=abs, ascending=False))
 
-print("\nPrediction Statistics:")
-print(f"Mean FP: {predictions.mean():.1f}")
-print(f"Max FP: {predictions.max():.1f}")
-print(f"Min FP: {predictions.min():.1f}")
+# Save skilled position predictions to flex.csv
+predictions_df[['Player', 'Predicted_FP']].to_csv('data_used/flex.csv', index=False)
 
+print("\nFeature Importance:")
+print(importance_df.sort_values(by='Importance', ascending=False))
+
+print("\nPredictions:")
+print(predictions_df)
 

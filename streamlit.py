@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import hashlib
 import time
+import pandas as pd
 
 class Player:
     def __init__(self, name, pos, team='', bye='', avg_rank=999):
@@ -61,7 +62,7 @@ class DraftHelper:
         """Load player rankings from CSV file"""
         try:
             # First load expert rankings to get player positions
-            expert_rankings_path = os.path.join(os.getcwd(), 'data_used', 'rankings.csv')
+            expert_rankings_path = os.path.join(os.getcwd(), 'data_used', 'rankings3.csv')
             player_positions = {}
             seen_players = set()  # Track seen players to avoid duplicates
             
@@ -75,41 +76,112 @@ class DraftHelper:
                     player_positions[row['Player'].lower()] = base_pos
 
             # Choose file based on ranking type
-            filename = 'rankings.csv' if ranking_type == 'expert' else 'flex.csv'
-            rankings_path = os.path.join(os.getcwd(), 'data_used', filename)
-            
-            if not os.path.exists(rankings_path):
-                print("Rankings file not found.")
-                return False
-            
-            self.available_players = []  # Reset available players
-            
-            with open(rankings_path, 'r', encoding='utf-8') as file:
-                reader = csv.DictReader(file)
-                for row in reader:
-                    try:
-                        player_name = row['Player']
-                        
-                        # Skip if we've already seen this player
-                        if player_name.lower() in seen_players:
-                            continue
-                        
-                        if ranking_type == 'ml':
-                            # For ML rankings, verify player exists in expert rankings
-                            player_pos = player_positions.get(player_name.lower())
-                            if not player_pos:
-                                continue  # Skip players not in expert rankings
-                            # Only include RB, WR, TE for flex rankings
-                            if player_pos not in ['QB','RB', 'WR', 'TE']:
-                                continue
+            if ranking_type == 'ml':
+                # Load both flex.csv (RB/WR/TE) and flex2.csv (QB) for ML rankings
+                flex_path = os.path.join(os.getcwd(), 'data_used', 'flex.csv')
+                flex2_path = os.path.join(os.getcwd(), 'data_used', 'flex2.csv')
+                
+                self.available_players = []  # Reset available players
+                
+                # First process flex.csv for both QB rushing and other positions
+                qb_rushing_points = {}  # Store QB rushing points
+                if os.path.exists(flex_path):
+                    with open(flex_path, 'r', encoding='utf-8') as file:
+                        reader = csv.DictReader(file)
+                        for row in reader:
                             try:
-                                # Directly read the Predicted_FP value
-                                rank_value = float(row['Predicted_FP'])
-                                #print(f"Loading {player_name}: {rank_value}")
-                            except ValueError:
+                                player_name = row['Player']
+                                if player_name.lower() in seen_players:
+                                    continue
+                                
+                                player_pos = player_positions.get(player_name.lower())
+                                if not player_pos:
+                                    continue
+
+                                try:
+                                    points = float(row['Predicted_FP'])
+                                except ValueError:
+                                    continue
+
+                                if player_pos == 'QB':  # Store QB rushing points for later
+                                    qb_rushing_points[player_name] = points
+                                    print(f"Found rushing points for QB {player_name}: {points}")
+                                elif player_pos in ['RB', 'WR', 'TE']:  # Process other positions normally
+                                    player = Player(
+                                        name=player_name,
+                                        pos=player_pos,
+                                        team=row.get('Team', ''),
+                                        bye=row.get('Bye', ''),
+                                        avg_rank=points
+                                    )
+                                    self.available_players.append(player)
+                                    seen_players.add(player_name.lower())
+                                    
+                            except (KeyError, ValueError) as e:
+                                print(f"Error processing flex.csv row: {row}")
+                                print(f"Error details: {str(e)}")
                                 continue
-                        else:
-                            # Expert rankings processing
+
+                # Process flex2.csv (QB)
+                if os.path.exists(flex2_path):
+                    with open(flex2_path, 'r', encoding='utf-8') as file:
+                        reader = csv.DictReader(file)
+                        print("flex2.csv columns:", reader.fieldnames)
+                        for row in reader:
+                            try:
+                                player_name = row['Player']
+                                if player_name.lower() in seen_players:
+                                    continue
+                                
+                                player_pos = 'QB'
+                                
+                                try:
+                                    # Combine passing and rushing points
+                                    pass_points = float(row['Predicted_FP'])
+                                    rush_points = qb_rushing_points.get(player_name, 0)  # Get rushing points or 0 if none
+                                    total_points = pass_points + rush_points
+                                    print(f"Processing QB {player_name}: {pass_points} passing + {rush_points} rushing = {total_points} total")
+                                    
+                                except ValueError as e:
+                                    print(f"Value error for {player_name}: {e}")
+                                    continue
+                                
+                                player = Player(
+                                    name=player_name,
+                                    pos=player_pos,
+                                    team=row.get('Team', ''),
+                                    bye=row.get('Bye', ''),
+                                    avg_rank=total_points
+                                )
+                                self.available_players.append(player)
+                                seen_players.add(player_name.lower())
+                                
+                            except (KeyError, ValueError) as e:
+                                print(f"Error processing flex2.csv row: {row}")
+                                print(f"Error details: {str(e)}")
+                                continue
+
+                return True  # Return True if we successfully loaded ML rankings
+                
+            else:
+                # Expert rankings processing (unchanged)
+                filename = 'rankings3.csv'
+                rankings_path = os.path.join(os.getcwd(), 'data_used', filename)
+                
+                if not os.path.exists(rankings_path):
+                    print("Rankings file not found.")
+                    return False
+                
+                self.available_players = []
+                
+                with open(rankings_path, 'r', encoding='utf-8') as file:
+                    reader = csv.DictReader(file)
+                    for row in reader:
+                        try:
+                            player_name = row['Player']
+                            if player_name.lower() in seen_players:
+                                continue
+                            
                             full_pos = row.get('POS', '')
                             player_pos = ''.join(c for c in full_pos if not c.isdigit())
                             try:
@@ -117,20 +189,20 @@ class DraftHelper:
                             except ValueError:
                                 rank_value = 999
                         
-                        player = Player(
-                            name=player_name,
-                            pos=player_pos,
-                            team=row.get('Team', ''),
-                            bye=row.get('Bye', ''),
-                            avg_rank=rank_value
-                        )
-                        self.available_players.append(player)
-                        seen_players.add(player_name.lower())
-                        
-                    except (KeyError, ValueError) as e:
-                        print(f"Error processing row: {row}")
-                        print(f"Error details: {str(e)}")
-                        continue
+                            player = Player(
+                                name=player_name,
+                                pos=player_pos,
+                                team=row.get('Team', ''),
+                                bye=row.get('Bye', ''),
+                                avg_rank=rank_value
+                            )
+                            self.available_players.append(player)
+                            seen_players.add(player_name.lower())
+                            
+                        except (KeyError, ValueError) as e:
+                            print(f"Error processing row: {row}")
+                            print(f"Error details: {str(e)}")
+                            continue
 
                 return True
                 
@@ -139,47 +211,54 @@ class DraftHelper:
             return False
 
     def search_player_stats(self, search_name):
-        """Search for player stats in the CSV file"""
+        """Search for player stats in the CSV files"""
         try:
+            # Get paths to both CSV files
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            csv_path = os.path.join(current_dir, 'data_used/fantasy_merged_7_17.csv')
+            qb_path = os.path.join(current_dir, 'data_used/historical_seasons_pass.csv')
+            skill_path = os.path.join(current_dir, 'data_used/historical_seasons_scrim.csv')
             
-            with open(csv_path, mode='r', encoding='utf-8') as csv_file:
-                csv_reader = csv.DictReader(csv_file)
-                all_players = list(csv_reader)
+            # Read both files
+            all_players = []
+            for csv_path in [qb_path, skill_path]:
+                with open(csv_path, mode='r', encoding='utf-8') as csv_file:
+                    csv_reader = csv.DictReader(csv_file)
+                    all_players.extend(list(csv_reader))
+            
+            search_terms = search_name.lower().split()
+            matching_players = []
+            
+            for row in all_players:
+                player_name = row['Player'].lower()
+                name_parts = player_name.split()
                 
-                search_terms = search_name.lower().split()
-                matching_players = []
+                # Check if any search term is a substring of any name part
+                if any(any(search_term in part or part in search_term 
+                          for part in name_parts)
+                         for search_term in search_terms):
+                    matching_players.append(row)
+            
+            # Group by player name to get all years
+            player_years = {}
+            for player in matching_players:
+                name = player['Player']
+                if name not in player_years:
+                    player_years[name] = []
+                player_years[name].append(player)
+
+            
+            # Sort each player's years in descending order
+            for name in player_years:
+                player_years[name].sort(key=lambda x: int(x['Year']), reverse=True)
                 
-                for row in all_players:
-                    player_name = row['Player'].lower()
-                    name_parts = player_name.split()
-                    
-                    # Check if any search term is a substring of any name part
-                    if any(any(search_term in part or part in search_term 
-                              for part in name_parts)
-                           for search_term in search_terms):
-                        matching_players.append(row)
-                
-                # Group by player name to get all years
-                player_years = {}
-                for player in matching_players:
-                    name = player['Player']
-                    if name not in player_years:
-                        player_years[name] = []
-                    player_years[name].append(player)
-                
-                # Sort each player's years in descending order
-                for name in player_years:
-                    player_years[name].sort(key=lambda x: int(x['Year']), reverse=True)
-                
-                return player_years
+
+            return player_years
                 
         except FileNotFoundError as e:
-            print(f"Error: Could not find file at {csv_path}")
+            print(f"Error: Could not find file: {e}")
             return None
         except Exception as e:
-            print(f"Error reading CSV file: {str(e)}")
+            print(f"Error reading CSV files: {str(e)}")
             return None
 
     def get_current_drafter(self, pick_number):
@@ -241,7 +320,26 @@ class DraftHelper:
         
         # Sort by average rank, considering if we're using ML rankings
         if getattr(st.session_state, 'using_ml', False):
-            available.sort(key=lambda x: float(x.avg_rank), reverse=True)  # Highest points first
+            # Sort by points (highest first) or position rank
+            if getattr(st.session_state, 'show_position_ranks', False):
+                # Group by position and sort within each position
+                by_position = {}
+                for p in available:
+                    if p.pos not in by_position:
+                        by_position[p.pos] = []
+                    by_position[p.pos].append(p)
+                
+                # Sort each position group by points and assign ranks
+                ranked_players = []
+                for pos in by_position:
+                    pos_players = by_position[pos]
+                    pos_players.sort(key=lambda x: float(x.avg_rank), reverse=True)
+                    for rank, player in enumerate(pos_players, 1):
+                        player.pos_rank = rank
+                    ranked_players.extend(pos_players)
+                available = ranked_players
+            else:
+                available.sort(key=lambda x: float(x.avg_rank), reverse=True)  # Highest points first
         else:
             available.sort(key=lambda x: float(x.avg_rank))  # Lowest rank first
         
@@ -465,14 +563,67 @@ def save_user_favorites(username, favorites):
     data['users'][username]['favorites'] = list(favorites)
     save_user_data(data)
 
+def save_user_busts(username, busts):
+    """Save user favorites to the JSON file"""
+    data = load_user_data()
+    data['users'][username]['busts'] = list(busts)
+    save_user_data(data)
+
+def load_historical_data():
+    """Load historical season data for players"""
+    try:
+        historical_qb_df = pd.read_csv('data_used/historical_seasons_pass.csv')
+        historical_skill_df = pd.read_csv('data_used/historical_seasons_scrim.csv')
+        
+        # Combine the dataframes
+        historical_df = pd.concat([historical_qb_df, historical_skill_df], ignore_index=True)
+        return historical_df
+    except FileNotFoundError as e:
+        st.error(f"Error loading historical data: {e}")
+        return pd.DataFrame()  # Return empty dataframe if files not found
+    except Exception as e:
+        st.error(f"Unexpected error loading historical data: {e}")
+        return pd.DataFrame()
+
 def main():
+    # Initialize session state variables if they don't exist
+    if 'page' not in st.session_state:
+        st.session_state.page = "Main"
+    
+    # Initialize historical passing data
+    if 'historical_passing' not in st.session_state:
+        try:
+            # Read CSV with proper column names
+            st.session_state.historical_passing = pd.read_csv(
+                'data_used/historical_seasons_pass.csv',
+                dtype={
+                    'Season': str,
+                    'Player': str,
+                    'Team': str,
+                    'Pos': str
+                }
+            )
+        except Exception as e:
+            st.error(f"Error loading historical passing data: {e}")
+            st.session_state.historical_passing = pd.DataFrame()
+    
+    # Initialize historical data
+    if 'historical_data' not in st.session_state:
+        try:
+            st.session_state.historical_data = pd.read_csv('data_used/historical_seasons_scrim.csv')
+        except Exception as e:
+            st.error(f"Error loading historical data: {e}")
+            st.session_state.historical_data = pd.DataFrame()
+    
+    # Initialize player search results if not present
+    if 'player_search_results' not in st.session_state:
+        st.session_state.player_search_results = {}
+    
     # Initialize session state for page and setup completion
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     if 'username' not in st.session_state:
         st.session_state.username = None
-    if 'page' not in st.session_state:
-        st.session_state.page = "Setup"
     if 'setup_complete' not in st.session_state:
         st.session_state.setup_complete = False
     if 'current_pick' not in st.session_state:
@@ -483,12 +634,12 @@ def main():
         st.session_state.selected_player = None
     if 'team_names' not in st.session_state:
         st.session_state.team_names = {}
-    if 'player_search_results' not in st.session_state:
-        st.session_state.player_search_results = {}
     if 'selected_stats_player' not in st.session_state:
         st.session_state.selected_stats_player = None
     if 'favorites' not in st.session_state:
         st.session_state.favorites = set()
+    if 'busts' not in st.session_state:
+        st.session_state.busts = set()
     if 'helper' not in st.session_state:
         st.session_state.helper = None
     if 'auto_drafting' not in st.session_state:
@@ -573,8 +724,6 @@ def main():
                 st.session_state.setup_complete = False
                 st.session_state.helper = None
                 st.rerun()
-
-    # Rest of your existing main() function code...
 
     if st.session_state.page == "Setup":
         st.title("Fantasy Football Draft Helper")
@@ -674,8 +823,19 @@ def main():
                         st.write("Search Results:")
                         for player in matching_players:
                             col1_search, col2_search = st.columns([4, 1])
+                            indicators = ""
+                            if player.name in st.session_state.favorites:
+                                indicators += " ⭐"
+                            if player.name in st.session_state.busts:
+                                indicators += " 🚫"
                             with col1_search:
-                                st.write(f"{player.name} ({player.pos}) - Rank: {player.avg_rank}")
+                                if getattr(st.session_state, 'using_ml', False):
+                                    if getattr(st.session_state, 'show_position_ranks', False):
+                                        st.write(f"{player.name}{indicators} ({player.pos}) - Position Rank: {getattr(player, 'pos_rank', 'N/A')}")
+                                    else:
+                                        st.write(f"{player.name}{indicators} ({player.pos}) - Projected Points: {player.avg_rank:.1f}")
+                                else:
+                                    st.write(f"{player.name}{indicators} ({player.pos}) - Rank: {int(player.avg_rank)}")
                             with col2_search:
                                 if st.button(f"Draft", key=f"search_draft_{player.name}_{player.avg_rank}"):
                                     success, draft_result = st.session_state.helper.draft_player(player.name, current_team)
@@ -720,7 +880,7 @@ def main():
                 
                 # Show best available section for all manual picks
                 with st.container():
-                    header_col1, header_col2 = st.columns([4, 1])
+                    header_col1, header_col2, header_col3 = st.columns([3, 1, 1])
                     with header_col1:
                         st.subheader("Best Available Players")
                     with header_col2:
@@ -738,15 +898,29 @@ def main():
                             else:
                                 message_container.error("Failed to load rankings")
                                 st.session_state.using_ml = not st.session_state.using_ml
+                    with header_col3:
+                        if getattr(st.session_state, 'using_ml', False):
+                            if st.button(
+                                "📊",  # Changed to chart emoji icon
+                                help="Toggle between Fantasy Points and Position Rankings",
+                                type="secondary",
+                                key="toggle_display_mode"
+                            ):
+                                st.session_state.show_position_ranks = not getattr(st.session_state, 'show_position_ranks', False)
+                                st.rerun()
 
-                    position = st.selectbox("Filter:", ['All','Favorites','QB', 'RB', 'WR', 'TE', 'K', 'DST'])
+                    position = st.selectbox("Filter:", ['All','Favorites','Busts','QB', 'RB', 'WR', 'TE', 'K', 'DST'])
                     
                     best_available = []  # Initialize best_available list
                     if position == 'Favorites':
                         best_available = [p for p in st.session_state.helper.available_players 
                                         if p.name in st.session_state.favorites]
                         best_available.sort(key=lambda x: x.avg_rank)
-                    elif position == 'All':
+                    elif position == 'Busts':
+                        best_available = [p for p in st.session_state.helper.available_players 
+                                        if p.name in st.session_state.busts]
+                        best_available.sort(key=lambda x: x.avg_rank)
+                    elif position == 'All': 
                         best_available = st.session_state.helper.get_best_available(top_n=10)
                     else:
                         best_available = st.session_state.helper.get_best_available_by_position(position, top_n=10)
@@ -754,11 +928,20 @@ def main():
                     if best_available:
                         for player in best_available:
                             col1, col2 = st.columns([4, 1])
+                            # Add indicator for favorite and bust
+                            indicators = ""
+                            if player.name in st.session_state.favorites:
+                                indicators += " ⭐"
+                            if player.name in st.session_state.busts:
+                                indicators += " 🚫"
                             with col1:
                                 if getattr(st.session_state, 'using_ml', False):
-                                    st.write(f"{player.name} ({player.pos}) - Projected Points: {player.avg_rank:.1f}")
+                                    if getattr(st.session_state, 'show_position_ranks', False):
+                                        st.write(f"{player.name}{indicators} ({player.pos}) - Position Rank: {getattr(player, 'pos_rank', 'N/A')}")
+                                    else:
+                                        st.write(f"{player.name}{indicators} ({player.pos}) - Projected Points: {player.avg_rank:.1f}")
                                 else:
-                                    st.write(f"{player.name} ({player.pos}) - Rank: {int(player.avg_rank)}")
+                                    st.write(f"{player.name}{indicators} ({player.pos}) - Rank: {int(player.avg_rank)}")
                             with col2:
                                 if st.button(f"Draft", key=f"draft_{player.name}_{player.avg_rank}"):
                                     success, draft_result = st.session_state.helper.draft_player(player.name, current_team)
@@ -773,7 +956,7 @@ def main():
                             st.info(f"No available {position} players.")
 
         # Navigation buttons in a horizontal layout
-        nav_col1, nav_col2,nav_col3= st.columns(3)
+        nav_col1, nav_col2, nav_col3 = st.columns(3)
         with nav_col1:
             if st.button("Go to Team Info"):
                 st.session_state.page = "TeamInfo"
@@ -783,11 +966,10 @@ def main():
                 st.session_state.page = "PlayerStats"
                 st.rerun()
         with nav_col3:
-            if st.button("Go to Favorites"):
-                st.session_state.page = "Favorites"
+            if st.button("Go to Favorites & Busts"):
+                st.session_state.page = "FavBust"
                 st.rerun()
 
-    
     elif st.session_state.page == "TeamInfo":
         st.title("Team Information")
         
@@ -823,82 +1005,130 @@ def main():
             st.rerun()
 
 
-    elif st.session_state.page == "Favorites":
-        st.title("Manage Favorite Players")
-        
-        # Initialize search results in session state if not present
-        if 'favorite_search_results' not in st.session_state:
-            st.session_state.favorite_search_results = []
-        
-        # Search section with both button and enter key functionality
-        st.subheader("Search Players to Favorite")
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            player_name = st.text_input("Enter Player Name:", key="favorite_search")
-        with col2:
-            search_clicked = st.button("Search", key="favorite_search_button")
-        
-        # Trigger search on either button click or enter key
-        if search_clicked or (player_name and player_name != st.session_state.get('last_favorite_search', '')):
-            st.session_state.last_favorite_search = player_name
-            if player_name:  # Only show search results if there's input
-                st.session_state.favorite_search_results = st.session_state.helper.find_player(player_name)
-        
-        # Display search results
-        if st.session_state.favorite_search_results:
-            st.write("Search Results:")
-            for player in st.session_state.favorite_search_results:
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"{player.name} ({player.pos}) - Rank: {player.avg_rank}")
-                with col2:
-                    if player.name not in st.session_state.favorites:
-                        if st.button("Favorite", key=f"fav_{player.name}_{player.avg_rank}"):
-                            st.session_state.favorites.add(player.name)
+    elif st.session_state.page == "FavBust":
+        st.title("Manage Favorites & Busts")
+        tab1, tab2 = st.tabs(["Favorites", "Busts"])
+
+        # --- Favorites Tab ---
+        with tab1:
+            # Initialize search results in session state if not present
+            if 'favorite_search_results' not in st.session_state:
+                st.session_state.favorite_search_results = []
+            st.subheader("Search Players to Favorite")
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                player_name = st.text_input("Enter Player Name:", key="favorite_search")
+            with col2:
+                search_clicked = st.button("Search", key="favorite_search_button")
+            if search_clicked or (player_name and player_name != st.session_state.get('last_favorite_search', '')):
+                st.session_state.last_favorite_search = player_name
+                if player_name:
+                    st.session_state.favorite_search_results = st.session_state.helper.find_player(player_name)
+            if st.session_state.favorite_search_results:
+                st.write("Search Results:")
+                for player in st.session_state.favorite_search_results:
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        st.write(f"{player.name} ({player.pos}) - Rank: {player.avg_rank}")
+                    with col2:
+                        if player.name not in st.session_state.favorites:
+                            if st.button("Favorite", key=f"fav_{player.name}_{player.avg_rank}"):
+                                st.session_state.favorites.add(player.name)
+                                if st.session_state.username != "Guest":
+                                    save_user_favorites(st.session_state.username, st.session_state.favorites)
+                                st.success(f"Added {player.name} to favorites!")
+                                st.rerun()
+                        else:
+                            st.write("✓ Favorited")
+            elif player_name:
+                st.info("No players found.")
+            st.subheader("Current Favorites")
+            if st.session_state.favorites:
+                favorite_players = []
+                for player in st.session_state.helper.available_players:
+                    if player.name in st.session_state.favorites:
+                        favorite_players.append((player, "Available"))
+                for team_num, team_players in st.session_state.helper.drafted_players.items():
+                    for player in team_players:
+                        if player.name in st.session_state.favorites:
+                            team_name = st.session_state.team_names.get(team_num, f"Team {team_num}")
+                            favorite_players.append((player, f"Drafted by {team_name}"))
+                favorite_players.sort(key=lambda x: x[0].avg_rank)
+                for player, status in favorite_players:
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        if getattr(st.session_state, 'using_ml', False):
+                            st.write(f"{player.name} ({player.pos}) - Projected Points: {player.avg_rank:.1f} - {status}")
+                        else:
+                            st.write(f"{player.name} ({player.pos}) - Rank: {int(player.avg_rank)} - {status}")
+                    with col2:
+                        if st.button("Remove", key=f"remove_{player.name}_{player.avg_rank}"):
+                            st.session_state.favorites.remove(player.name)
                             if st.session_state.username != "Guest":
                                 save_user_favorites(st.session_state.username, st.session_state.favorites)
-                            st.success(f"Added {player.name} to favorites!")
                             st.rerun()
-                    else:
-                        st.write("✓ Favorited")
-        elif player_name:
-            st.info("No players found.")
+            else:
+                st.info("No players have been favorited yet.")
 
-        # Current favorites section
-        st.subheader("Current Favorites")
-        if st.session_state.favorites:
-            # Get all favorited players (both available and drafted)
-            favorite_players = []
-            
-            # Check available players
-            for player in st.session_state.helper.available_players:
-                if player.name in st.session_state.favorites:
-                    favorite_players.append((player, "Available"))
-            
-            # Check drafted players
-            for team_num, team_players in st.session_state.helper.drafted_players.items():
-                for player in team_players:
-                    if player.name in st.session_state.favorites:
-                        team_name = st.session_state.team_names.get(team_num, f"Team {team_num}")
-                        favorite_players.append((player, f"Drafted by {team_name}"))
-            
-            # Sort by rank
-            favorite_players.sort(key=lambda x: x[0].avg_rank)
-            
-            # Display favorites
-            for player, status in favorite_players:
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"{player.name} ({player.pos}) - Rank: {player.avg_rank} - {status}")
-                with col2:
-                    if st.button("Remove", key=f"remove_{player.name}_{player.avg_rank}"):
-                        st.session_state.favorites.remove(player.name)
-                        if st.session_state.username != "Guest":
-                            save_user_favorites(st.session_state.username, st.session_state.favorites)
-                        st.rerun()
-        else:
-            st.info("No players have been favorited yet.")
-
+        # --- Busts Tab ---
+        with tab2:
+            if 'bust_search_results' not in st.session_state:
+                st.session_state.bust_search_results = []
+            st.subheader("Search Players to Bust")
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                player_name = st.text_input("Enter Player Name:", key="bust_search")
+            with col2:
+                search_clicked = st.button("Search", key="bust_search_button")
+            if search_clicked or (player_name and player_name != st.session_state.get('last_bust_search', '')):
+                st.session_state.last_bust_search = player_name
+                if player_name:
+                    st.session_state.bust_search_results = st.session_state.helper.find_player(player_name)
+            if st.session_state.bust_search_results:
+                st.write("Search Results:")
+                for player in st.session_state.bust_search_results:
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        st.write(f"{player.name} ({player.pos}) - Rank: {player.avg_rank}")
+                    with col2:
+                        if player.name not in st.session_state.busts:
+                            if st.button("Bust", key=f"bustpage_{player.name}_{player.avg_rank}"):
+                                st.session_state.busts.add(player.name)
+                                if st.session_state.username != "Guest":
+                                    save_user_busts(st.session_state.username, st.session_state.busts)
+                                st.success(f"Added {player.name} to busts!")
+                                st.rerun()
+                        else:
+                            st.write("✓ Busted")
+            elif player_name:
+                st.info("No players found.")
+            st.subheader("Current Busts")
+            if st.session_state.busts:
+                bust_players = []
+                for player in st.session_state.helper.available_players:
+                    if player.name in st.session_state.busts:
+                        bust_players.append((player, "Available"))
+                for team_num, team_players in st.session_state.helper.drafted_players.items():
+                    for player in team_players:
+                        if player.name in st.session_state.busts:
+                            team_name = st.session_state.team_names.get(team_num, f"Team {team_num}")
+                            bust_players.append((player, f"Drafted by {team_name}"))
+                bust_players.sort(key=lambda x: x[0].avg_rank)
+                for player, status in bust_players:
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        if getattr(st.session_state, 'using_ml', False):
+                            st.write(f"{player.name} ({player.pos}) - Projected Points: {player.avg_rank:.1f} - {status}")
+                        else:
+                            st.write(f"{player.name} ({player.pos}) - Rank: {int(player.avg_rank)} - {status}")
+                    with col2:
+                        if st.button("Remove", key=f"remove_bust_{player.name}_{player.avg_rank}"):
+                            st.session_state.busts.remove(player.name)
+                            if st.session_state.username != "Guest":
+                                save_user_busts(st.session_state.username, st.session_state.busts)
+                            st.rerun()
+            else:
+                st.info("No players have been busted yet.")
         if st.button("Back to Main"):
             st.session_state.page = "Main"
             st.rerun()
@@ -916,24 +1146,44 @@ def main():
         # Trigger search on either button click or enter key
         if search_clicked or (player_name and player_name != st.session_state.get('last_stats_search', '')):
             st.session_state.last_stats_search = player_name
-            results = st.session_state.helper.search_player_stats(player_name)
-            if results is None:
-                st.error("Could not read player stats file")
-            elif not results:
-                st.info(f"No players found matching '{player_name}'")
+            
+            # Get historical data from session state
+            historical_df = st.session_state.historical_data
+            
+            if historical_df.empty:
+                st.error("Could not read player stats")
             else:
-                st.session_state.player_search_results = results
+                # Search for player (case-insensitive)
+                search_terms = player_name.lower().split()
+                # Check if it's a QB (passing stats) or skill position player
+                if 'Season' in historical_df.columns:  # QB data
+                    player_col = historical_df.columns[-1]  # Player name is the last column
+                else:  # Skill position data
+                    player_col = 'Player'  # Player name column for skill positions
                 
-                # Display player selection if multiple players found
-                if len(results) > 1:
-                    player_options = list(results.keys())
-                    selected_player = st.selectbox("Select Player:", player_options)
-                    if selected_player:
-                        display_player_stats(results[selected_player])
+                mask = historical_df[player_col].str.lower().apply(
+                    lambda x: all(term in str(x).lower() for term in search_terms)
+                )
+                results = historical_df[mask]
+                
+                if len(results) == 0:
+                    st.info(f"No players found matching '{player_name}'")
                 else:
-                    # Display stats for single player found
-                    player_name = list(results.keys())[0]
-                    display_player_stats(results[player_name])
+                    # Group by player name
+                    player_groups = results.groupby(player_col)
+                    player_stats = {name: group.to_dict('records') for name, group in player_groups}
+                    st.session_state.player_search_results = player_stats
+                    
+                    # Display player selection if multiple players found
+                    if len(player_stats) > 1:
+                        player_options = list(player_stats.keys())
+                        selected_player = st.selectbox("Select Player:", player_options)
+                        if selected_player:
+                            display_player_stats(player_stats[selected_player])
+                    else:
+                        # Display stats for single player found
+                        player_name = list(player_stats.keys())[0]
+                        display_player_stats(player_stats[player_name])
 
         # Display existing search results if they exist
         elif st.session_state.player_search_results:
@@ -951,47 +1201,241 @@ def main():
             st.session_state.page = "Main"
             st.rerun()
 
+    elif st.session_state.page == "Stat Search":
+        stat_search()
+
 def display_player_stats(years_data):
-    st.subheader(f"Career Statistics for {years_data[0]['Player']}")
-    if years_data[0]['FantPos']!= "QB":
-        for year_data in years_data:
-            st.write(f"Year: {year_data['Year']}, Team: {year_data['Tm']}, Position: {year_data['FantPos']}")
-            st.write(f"Games: {year_data['G']}, Starts: {year_data['GS']}, Fantasy Points: {year_data['PPR']}, Position Rank:{year_data['PosRk']}")
-             # Calculate yards per game
-            rush_yards = year_data.get('RushYds', 0) or 0
-            rec_yards = year_data.get('RecYds', 0) or 0
-            games = int(year_data['G']) if year_data['G'] else 1
-            
-            rush_ypg = round(float(rush_yards) / games, 1) if games > 0 else 0
-            rec_ypg = round(float(rec_yards) / games, 1) if games > 0 else 0
-
-            st.write(f"Carries:{year_data.get('RushAtt','N/A')},Rushing Yards: {year_data.get('RushYds', 'N/A')}, Rushing TDs: {year_data.get('RushTD', 'N/A')}")
-            st.write(f"Yards per Carry: {year_data.get('YA', 'N/A')}, Yards per Game:{rush_ypg} ")
-            st.write(f"Targets:{year_data.get('Tgt', 'N/A')}, Receptions:{year_data.get('Rec', 'N/A')}, Receiving Yards: {year_data.get('RecYds', 'N/A')}, Receiving TDs: {year_data.get('RecTD', 'N/A')}")
-            st.write(f"Yards per Reception: {year_data.get('YR', 'N/A')}, Yards per Game:{rec_ypg} ")
-            st.write("---")
+    # Get player name based on data format
+    if ' Player' in years_data[0]:
+        player_name = years_data[0][' Player']
     else:
+        player_name = list(years_data[0].keys())[-1]
+    
+    st.subheader(f"Career Statistics for {player_name}")
+    
+    # Check if it's a QB by looking at position
+    is_qb = any(year.get(' Pos') == 'QB' for year in years_data if ' Pos' in year)
+    
+    if is_qb:
+        passing_df = st.session_state.historical_passing
+        
+        # Create a dictionary to store unique seasons
+        unique_seasons = {}
         for year_data in years_data:
-             # Calculate yards per game and completion
-            pass_yards = year_data.get('Yds', 0) or 0
-            completions = year_data.get('Cmp', 0) or 0
-            games = int(year_data['G']) if year_data['G'] else 1
+            if year_data.get('Season'):
+                season = str(int(year_data['Season']))
+                if season not in unique_seasons:
+                    unique_seasons[season] = year_data
+        
+        # Sort seasons in descending order
+        sorted_seasons = sorted(unique_seasons.items(), key=lambda x: float(x[0]), reverse=True)
+        
+        for season, year_data in sorted_seasons:
+            games = float(year_data.get(' G', 1)) or 1
             
-            pass_ypg = round(float(pass_yards) / games, 1) if games > 0 else 0
-            yards_per_completion = round(float(pass_yards) / float(completions), 1) if float(completions) > 0 else 0
+            # Filter passing stats using correct column names
+            filtered_df = passing_df[
+                (passing_df['Season'].astype(str) == season) & 
+                (passing_df['Player'].str.contains(player_name, case=False, na=False))
+            ]
+            
+            pass_stats = filtered_df.to_dict('records')
+            
+            # Create a container for each season's stats
+            with st.container():
+                st.markdown(f"### {season} Season")
+                st.write(f"Team: {year_data.get(' Team')}")
+                st.write(f"Games: {year_data.get(' G')}, Starts: {year_data.get(' GS')}")
+                
+                # Display passing stats if available
+                if pass_stats:
+                    pass_data = pass_stats[0]
+                    completions = float(pass_data['Cmp'])
+                    attempts = float(pass_data['Att'])
+                    pass_yards = float(pass_data['Yds'])
+                    pass_tds = float(pass_data['TD'])
+                    interceptions = float(pass_data['Int'])
+                    rating = pass_data['Rate']
+                    
+                    # Calculate passing stats
+                    pass_ypg = round(pass_yards / games, 1) if games > 0 else 0
+                    yards_per_completion = round(pass_yards / completions, 1) if completions > 0 else 0
+                    completion_percentage = round((completions / attempts * 100), 1) if attempts > 0 else 0
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Passing Stats**")
+                        st.write(f"Completions: {int(completions)}/{int(attempts)} ({completion_percentage}%)")
+                        st.write(f"Passing Yards: {int(pass_yards)}")
+                        st.write(f"Touchdowns: {int(pass_tds)}")
+                        st.write(f"Interceptions: {int(interceptions)}")
+                    
+                    with col2:
+                        st.write("**Efficiency**")
+                        st.write(f"Yards per Completion: {yards_per_completion}")
+                        st.write(f"Yards per Game: {pass_ypg}")
+                        st.write(f"Passer Rating: {rating}")
+                
+                # Calculate rushing stats
+                try:
+                    rush_attempts = float(year_data.get(' Att', '0'))
+                    rush_yards = float(year_data.get(' YScm', '0'))
+                    rush_tds = float(year_data.get(' RRTD', '0'))
+                except (ValueError, TypeError):
+                    rush_attempts = 0
+                    rush_yards = 0
+                    rush_tds = 0
+                
+                rush_ypg = round(rush_yards / games, 1) if games > 0 else 0
+                yards_per_rush = round(rush_yards / rush_attempts, 1) if rush_attempts > 0 else 0
+                
+                st.write("**Rushing Stats**")
+                st.write(f"Carries: {int(rush_attempts)}, Yards: {int(rush_yards)}, TDs: {int(rush_tds)}")
+                st.write(f"Yards per Carry: {yards_per_rush}, Yards per Game: {rush_ypg}")
+                
+                st.markdown("---")
+    else:
+        # Display non-QB stats, deduplicate by season
+        unique_seasons = {}
+        for year_data in years_data:
+            season = year_data.get('Season')
+            if season and season not in unique_seasons:
+                unique_seasons[season] = year_data
+        for season, year_data in sorted(unique_seasons.items(), key=lambda x: float(x[0]), reverse=True):
+            if not year_data:
+                continue
+                
+            games = float(year_data.get(' G', 1)) or 1
+            
+            with st.container():
+                st.markdown(f"### {season} Season")
+                st.write(f"Team: {year_data.get(' Team')}")
+                st.write(f"Games: {year_data.get(' G')}, Starts: {year_data.get(' GS')}")
+                
+                # Calculate rushing/receiving stats
+                try:
+                    attempts = float(year_data.get(' Att', '0'))
+                    yards = float(year_data.get(' Yds', '0'))
+                    tds = float(year_data.get(' TD', '0'))
+                    receptions = float(year_data.get(' Rec', '0'))
+                    rec_yards = float(year_data.get(' RecYds', '0'))
+                    rec_tds = float(year_data.get(' RecTD', '0'))
+                except (ValueError, TypeError):
+                    attempts = yards = tds = receptions = rec_yards = rec_tds = 0
+                
+                # Calculate per-game and efficiency stats
+                rush_ypg = round(yards / games, 1) if games > 0 else 0
+                yards_per_rush = round(yards / attempts, 1) if attempts > 0 else 0
+                rec_ypg = round(rec_yards / games, 1) if games > 0 else 0
+                yards_per_rec = round(rec_yards / receptions, 1) if receptions > 0 else 0
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Rushing Stats**")
+                    st.write(f"Carries: {int(attempts)}")
+                    st.write(f"Rushing Yards: {int(yards)}")
+                    st.write(f"Rushing TDs: {int(tds)}")
+                    st.write(f"Yards per Carry: {yards_per_rush}")
+                    st.write(f"Rushing Yards per Game: {rush_ypg}")
+                
+                with col2:
+                    st.write("**Receiving Stats**")
+                    st.write(f"Receptions: {int(receptions)}")
+                    st.write(f"Receiving Yards: {int(rec_yards)}")
+                    st.write(f"Receiving TDs: {int(rec_tds)}")
+                    st.write(f"Yards per Reception: {yards_per_rec}")
+                    st.write(f"Receiving Yards per Game: {rec_ypg}")
+                
+                st.markdown("---")
 
-            # Rushing stats for QB
-            rush_yards = year_data.get('RushYds', 0) or 0
-            rush_ypg = round(float(rush_yards) / games, 1) if games > 0 else 0
-            
-            st.write(f"Year: {year_data['Year']}, Team: {year_data['Tm']}, Position: {year_data['FantPos']}")
-            st.write(f"Games: {year_data['G']}, Starts: {year_data['GS']}, Fantasy Points: {year_data['PPR']}, Position Rank:{year_data['PosRk']}")
-            st.write(f"Completions:{year_data.get('Cmp','N/A')},Attempts: {year_data.get('Att', 'N/A')}, Passing Yards: {year_data.get('Yds', 'N/A')},Touchdowns:{year_data.get('TD', 'N/A')},Interceptions:{year_data.get('Int', 'N/A')}")
-            st.write(f"Yards per Completion:{yards_per_completion} , Yards per Game:{pass_ypg}")
-            st.write(f"Fumbles: {year_data.get('Fmb', 'N/A')}, Fumbles Lost:{year_data.get('FL', 'N/A')}")
-            st.write(f"Carries:{year_data.get('RushAtt','N/A')},Rushing Yards: {year_data.get('RushYds', 'N/A')}, Rushing TDs: {year_data.get('RushTD', 'N/A')}")
-            st.write(f"Yards per Carry: {year_data.get('YA', 'N/A')}, Yards per Game:{rush_ypg} ")
-            st.write("---")
+def stat_search():
+    st.title("Player Stat Search")
+    
+    # Get the historical data
+    historical_df = st.session_state.historical_data
+    
+    if historical_df.empty:
+        st.error("Historical data could not be loaded. Please check that the CSV files exist.")
+        return
+    
+    # Create filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        player_name = st.text_input("Player Name", "")
+    
+    with col2:
+        positions = sorted(historical_df['FantPos'].unique().tolist())
+        position = st.selectbox("Position", ["All"] + positions)
+    
+    with col3:
+        years = sorted(historical_df['Year'].unique().tolist(), reverse=True)
+        year = st.selectbox("Season", ["All"] + years)
+    
+    # Filter the data based on user inputs
+    filtered_df = historical_df.copy()
+    
+    if player_name:
+        filtered_df = filtered_df[filtered_df['Player'].str.contains(player_name, case=False)]
+    
+    if position != "All":
+        filtered_df = filtered_df[filtered_df['FantPos'] == position]
+    
+    if year != "All":
+        filtered_df = filtered_df[filtered_df['Year'] == year]
+    
+    # Display the filtered data
+    if not filtered_df.empty:
+        # Select relevant columns based on position
+        if position == "QB" or (position == "All" and not filtered_df[filtered_df['FantPos'] == "QB"].empty):
+            qb_cols = ['Player', 'Year', 'Tm', 'FantPos', 'G', 'GS', 'Cmp', 'Att', 'Yds', 'TD', 'Int', 
+                      'RushAtt', 'RushYds', 'RushTD', 'PPR', 'PosRk']
+            qb_df = filtered_df[filtered_df['FantPos'] == "QB"]
+            if not qb_df.empty:
+                st.subheader("Quarterback Stats")
+                st.dataframe(qb_df[qb_cols].sort_values(by=['Year', 'PPR'], ascending=[False, False]))
+        
+        if position != "QB" or position == "All":
+            skill_cols = ['Player', 'Year', 'Tm', 'FantPos', 'G', 'GS', 'Tgt', 'Rec', 'RecYds', 'RecTD',
+                         'RushAtt', 'RushYds', 'RushTD', 'PPR', 'PosRk']
+            skill_df = filtered_df[filtered_df['FantPos'] != "QB"]
+            if not skill_df.empty:
+                st.subheader("Skill Position Stats")
+                st.dataframe(skill_df[skill_cols].sort_values(by=['Year', 'PPR'], ascending=[False, False]))
+
+def search_player(name):
+    # Convert search name to lowercase for case-insensitive comparison
+    search_name = name.lower().strip()
+    
+    # Get all available data
+    historical_passing = st.session_state.historical_passing
+    historical_data = st.session_state.historical_data
+    
+    # Debug info
+    st.write("Debug - Searching historical passing data:")
+    if not historical_passing.empty:
+        st.write(historical_passing['Player'].head())
+    
+    st.write("Debug - Searching historical data:")
+    if not historical_data.empty:
+        st.write(historical_data['Player'].head())
+    
+    # Search in both datasets
+    matching_players_passing = historical_passing[
+        historical_passing['Player'].str.lower().str.contains(search_name, na=False)
+    ]
+    
+    matching_players_historical = historical_data[
+        historical_data['Player'].str.lower().str.contains(search_name, na=False)
+    ]
+    
+    # Combine results
+    if not matching_players_historical.empty:
+        return matching_players_historical.to_dict('records')
+    elif not matching_players_passing.empty:
+        return matching_players_passing.to_dict('records')
+    
+    return []
 
 if __name__ == "__main__":
     main()
